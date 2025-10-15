@@ -1,0 +1,29 @@
+FROM rocm/dev-ubuntu-22.04:6.4.1-complete
+
+# with Python 3.10.12
+
+RUN pip install --upgrade pip
+RUN pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/rocm6.4
+# Successfully installed MarkupSafe-2.1.5 filelock-3.19.1 fsspec-2025.9.0 jinja2-3.1.6 mpmath-1.3.0 networkx-3.3 pytorch-triton-rocm-3.4.0 sympy-1.14.0 torch-2.8.0+rocm6.4 typing-extensions-4.15.0
+
+RUN pip install -U xformers==0.0.32.post2 --index-url https://download.pytorch.org/whl/rocm6.4
+# Successfully installed numpy-2.1.2 xformers-0.0.32.post2
+
+
+RUN pip install "cmake>=3.26.1,<4"
+
+RUN apt update
+RUN apt -y install git
+
+# WORKDIR vllm
+# ENV PYTORCH_ROCM_ARCH="gfx942"
+# RUN pip install -r ./requirements/rocm.txt
+# RUN python3 setup.py bdist_wheel --dist-dir=dist
+# RUN pip install dist/vllm-0.10.2.dev3+ga9c179c2c.d20251015.rocm641-cp310-cp310-linux_x86_64.whl
+# Successfully installed vllm-0.10.2.dev3+ga9c179c2c.d20251015.rocm641
+
+# for test accuracy
+RUN pip install librosa datasets==3.6.0 evaluate torchcodec whisper_normalizer jiwer
+RUN apt update && apt -y install ffmpeg
+
+# RUN pip install librosa
