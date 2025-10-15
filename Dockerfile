@@ -12,3 +12,12 @@ WORKDIR /app/
 RUN pip install librosa
 RUN pip install xformers-0.0.32+5f0419af.d20251013-cp39-abi3-linux_x86_64.whl
 
+ENV VLLM_ATTENTION_BACKEND=XFORMERS
+
+# 3.6.0 uses librosa instead of torchcodec, to workaround bug in torchcodec
+RUN pip install datasets==3.6.0
+RUN pip install evaluate
+RUN pip install torchcodec
+RUN pip install whisper_normalizer
+RUN pip install jiwer
+RUN apt update && apt -y install ffmpeg
