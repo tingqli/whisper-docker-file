@@ -133,7 +133,7 @@ def load_demo_datasets():
     return dataset.map(preprocess)
 
 def load_librispeech_asr_test_datasets():
-    dataset = load_dataset("kresnik/librispeech_asr_test", "clean", split="test")
+    dataset = load_dataset("kresnik/librispeech_asr_test", "clean", split="test", trust_remote_code=True)
     def preprocess(row):
         row["language"] = "en"
         return row
@@ -143,14 +143,20 @@ if __name__ == "__main__":
     # https://huggingface.co/docs/datasets/access
     #dataset = load_demo_datasets()
     # 
-    #dataset = load_1000_datasets() # wer_score: 29.89 %
+    #dataset = load_1000_datasets()
+
+    # HF wer_score: 1.74 %
+    # Accuracy is consistent in both AMD & NV
+    # vLLM wer_score batch-size1  ,kv-cache-fp16: 1.88 %
+    # vLLM wer_score batch-size1  ,kv-cache-fp8 : 1.88 %
+    # vLLM wer_score batch-size256,kv-cache-fp8 : 1.88 %
     dataset = load_librispeech_asr_test_datasets()
     dataset = dataset.filter(lambda example: example["audio"]["array"].shape[0] < 30*16000)
 
     print(dataset)
 
-    predictions = speech_recognition_hf(dataset)
-    #predictions = speech_recognition_vllm(dataset)
+    #predictions = speech_recognition_hf(dataset)
+    predictions = speech_recognition_vllm(dataset, use_fp8_kv_cache=True, batch_size=256)
     # https://pypi.org/project/whisper-normalizer/
     from whisper_normalizer.english import EnglishTextNormalizer
     english_normalizer = EnglishTextNormalizer()
