@@ -1,3 +1,6 @@
+
+# pip install whisper_normalizer zhconv cntn datasets==3.6.0 evaluate jiwer
+
 import os
 os.environ['VLLM_ATTENTION_BACKEND'] = 'XFORMERS'
 
@@ -39,6 +42,40 @@ def speech_recognition_hf(dataset):
         predictions.append(result["text"])
 
     return predictions
+
+def speech_recognition_firered_asr(dataset, beam_size = 1, batch_size = 16):
+    # need to install fireredasr & download FireRedASR-AED-L
+    # https://github.com/FireRedTeam/FireRedASR?tab=readme-ov-file#setup
+    # huggingface-cli download --resume-download FireRedTeam/FireRedASR-AED-L --local-dir FireRedASR-AED-L
+    from fireredasr.models.fireredasr import FireRedAsr
+    model = FireRedAsr.from_pretrained("aed", "FireRedASR-AED-L")
+    predictions = []
+    batch_uttid = []
+    batch_wav_path = []
+
+    for i in tqdm(range(dataset.num_rows)):
+        batch_uttid.append(i)
+        batch_wav_path.append(dataset[i]["audio"]["path"])
+        if len(batch_uttid) >= batch_size or i == (dataset.num_rows - 1):
+            results = model.transcribe(
+                batch_uttid,
+                batch_wav_path,
+                {
+                    "use_gpu": 1,
+                    "beam_size": beam_size,
+                    "nbest": 1,
+                    "decode_max_len": 0,
+                    "softmax_smoothing": 1.0,
+                    "aed_length_penalty": 0.0,
+                    "eos_penalty": 1.0
+                }
+            )
+            for r in results:
+                predictions.append(r["text"])
+            batch_uttid = []
+            batch_wav_path = []
+    return predictions
+
 
 def speech_recognition_faster_whisper(dataset, beam_size = 1):
     from faster_whisper import WhisperModel, BatchedInferencePipeline
@@ -174,29 +211,38 @@ if __name__ == "__main__":
     #dataset = load_1000_datasets()
 
     # HF wer_score: 1.74 %
-    # vLLM wer_score batch-size1  ,kv-cache-fp16: 1.88 %
-    # vLLM wer_score batch-size1  ,kv-cache-fp8 : 1.88 %
-    # vLLM wer_score batch-size256,kv-cache-fp8 : 1.88 %
-    #
+    # vLLM batch-size1  ,kv-cache-fp16: wer_score 1.88 %
+    # vLLM batch-size1  ,kv-cache-fp8 : wer_score 1.88 %
+    # vLLM batch-size256,kv-cache-fp8 : wer_score 1.88 %
+    # fireredasr FireRedASR-AED-L: wer_score: 97.66 
     # faster_whisper beam_size=1: wer_score: 1.79 %  5.05it/s
     # faster_whisper beam_size=5: wer_score: 1.74 %  4.52it/s
     #dataset = load_librispeech_asr_test_datasets()
 
-    # faster_whisper beam_size=1: wer_score:  
+    # whisper-large-v3 on wenetspeech :
+    #  https://arxiv.org/pdf/2501.14350       CER:18.87
+    #  https://zhuanlan.zhihu.com/p/662906303 CER:20.15
+    
+    # faster_whisper beam_size=1        4.90it/s:  wer_score: 97.62 % cer_score: 21.37 %
+    # faster_whisper beam_size=5        4.43it/s:  wer_score: 96.67 % cer_score: 19.36 %
+    # fireredasr FireRedASR-AED-L  H20: 4.86it/s:  wer_score: 58.77 % cer_score: 4.96 %
+    # fireredasr FireRedASR-AED-L  308:
+    # vLLM batch256,kv-cache-fp8 H20 RPS: 31.10 wer_score: 97.50 % cer_score: 20.40 %
+    # vLLM batch256,kv-cache-fp8 308 RPS: 31.67: wer_score: 97.61 %  cer_score: 20.52 %
     dataset = load_WenetSpeech_datasets()
     dataset = dataset.filter(lambda example: example["audio"]["array"].shape[0] < 30*16000)
-    # dataset = dataset.select(range(0,20))
+    dataset = dataset.select(range(0,20))
 
     print(dataset)
 
     #results = speech_recognition_hf(dataset)
-    results = speech_recognition_vllm(dataset, use_fp8_kv_cache=True, batch_size=256)
+    #results = speech_recognition_vllm(dataset, use_fp8_kv_cache=True, batch_size=256)
     #results = speech_recognition_faster_whisper(dataset, beam_size=1)
+    results = speech_recognition_firered_asr(dataset, beam_size=1)
 
     # https://pypi.org/project/whisper-normalizer/
     from whisper_normalizer.english import EnglishTextNormalizer
     from whisper_normalizer.basic import BasicTextNormalizer
-
     from zhconv import convert
     # https://github.com/open-speech/cn-text-normalizer
     import cntn
@@ -217,14 +263,15 @@ if __name__ == "__main__":
         language_code = row["language"]
         if language_code not in text_normalizers: language_code = "basic"
         norm = text_normalizers[language_code]
-        predictions.append(norm(pred))
-        references.append(norm(row["text"]))
+        pred = norm(pred)
+        ref = norm(row["text"])
+        predictions.append(pred)
+        references.append(ref)
 
-    if 0:
-        for p, r, in zip(predictions, references):
-            print("==========")
-            print(r)
-            print(p)
+        if 1:
+            print("========== ", row["audio"]["path"])
+            print(ref)
+            print(pred)
 
     # print both WER & CER
     # https://huggingface.co/learn/audio-course/zh-CN/chapter5/evaluation
