@@ -50,11 +50,9 @@ def speech_recognition_faster_whisper(dataset, beam_size = 1):
         audio = dataset[i]["audio"]["array"]
         language = dataset[i]["language"]
         # segments, info = batched_model.transcribe(audio=audio, batch_size=8, beam_size=beam_size, without_timestamps=True, language=language)
-        segments, info = model.transcribe(audio=audio, beam_size=beam_size, without_timestamps=True, language=language)
+        segments, info = model.transcribe(audio=audio, beam_size=beam_size, without_timestamps=True, language=language, language_detection_segments=0)
         # print("Detected language '%s' with probability %f" % (info.language, info.language_probability))
-        segments = list(segments)
-        assert len(segments) == 1
-        predictions.append(segments[0].text)
+        predictions.append("".join([s.text for s in segments]))
     return predictions
 
 def speech_recognition_vllm(dataset, batch_size = 1, max_tokens = 500, use_fp8_kv_cache=False, enforce_eager=False):
@@ -160,11 +158,13 @@ def load_librispeech_asr_test_datasets():
     return dataset.map(preprocess)
 
 def load_WenetSpeech_datasets():
-    dataset = load_dataset("TwinkStart/WenetSpeech", split="test_meeting", trust_remote_code=True)
+    # RnpfulybhtQBASxeBjygvonADhOwSnNAUj
+    #dataset = load_dataset("TwinkStart/WenetSpeech", split="test_meeting", trust_remote_code=True)
+    ws_test_meeting = load_dataset("wenet-e2e/wenetspeech", "TEST_MEETING", split="test", trust_remote_code=True)
     def preprocess(row):
         row["language"] = "zh"
         return row
-    return dataset.map(preprocess)
+    return ws_test_meeting.map(preprocess)
 
 
 if __name__ == "__main__":
@@ -185,21 +185,40 @@ if __name__ == "__main__":
     # faster_whisper beam_size=1: wer_score:  
     dataset = load_WenetSpeech_datasets()
     dataset = dataset.filter(lambda example: example["audio"]["array"].shape[0] < 30*16000)
-    dataset = dataset.select(range(0,20))
+    # dataset = dataset.select(range(0,20))
 
     print(dataset)
 
-    #predictions = speech_recognition_hf(dataset)
-    predictions = speech_recognition_vllm(dataset, use_fp8_kv_cache=True, batch_size=256)
-    #predictions = speech_recognition_faster_whisper(dataset, beam_size=5)
+    #results = speech_recognition_hf(dataset)
+    results = speech_recognition_vllm(dataset, use_fp8_kv_cache=True, batch_size=256)
+    #results = speech_recognition_faster_whisper(dataset, beam_size=1)
 
     # https://pypi.org/project/whisper-normalizer/
     from whisper_normalizer.english import EnglishTextNormalizer
-    normalizer = EnglishTextNormalizer()
-    def ZhTextNormalizer(x): return x
-    normalizer = ZhTextNormalizer
-    predictions = [normalizer(x) for x in predictions]
-    references = [normalizer(dataset[i]["text"]) for i in range(dataset.num_rows)]
+    from whisper_normalizer.basic import BasicTextNormalizer
+
+    from zhconv import convert
+    # https://github.com/open-speech/cn-text-normalizer
+    import cntn
+    def ZhTextNormalizer(x):
+        x = convert(x, "zh-cn")
+        x = cntn.w2s(x)
+        return x
+
+    text_normalizers = {
+        "zh":ZhTextNormalizer,
+        "en":EnglishTextNormalizer(),
+        "basic" : BasicTextNormalizer()
+    }
+
+    predictions = []
+    references = []
+    for row, pred in zip(dataset, results):
+        language_code = row["language"]
+        if language_code not in text_normalizers: language_code = "basic"
+        norm = text_normalizers[language_code]
+        predictions.append(norm(pred))
+        references.append(norm(row["text"]))
 
     if 0:
         for p, r, in zip(predictions, references):
@@ -207,7 +226,10 @@ if __name__ == "__main__":
             print(r)
             print(p)
 
+    # print both WER & CER
+    # https://huggingface.co/learn/audio-course/zh-CN/chapter5/evaluation
     import evaluate
     wer = evaluate.load("wer")
-    wer_score = wer.compute(predictions=predictions, references=references)
-    print(f"wer_score: {wer_score * 100:.2f} %")
+    cer = evaluate.load("cer")
+    print(f"wer_score: {wer.compute(predictions=predictions, references=references) * 100:.2f} %")
+    print(f"cer_score: {cer.compute(predictions=predictions, references=references) * 100:.2f} %")
