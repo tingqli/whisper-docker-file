@@ -3,6 +3,9 @@
 
 import os
 os.environ['VLLM_ATTENTION_BACKEND'] = 'XFORMERS'
+# reduce MIOPEN's FindDB overhead for conv1d in fireredasr
+# https://rocm.docs.amd.com/projects/MIOpen/en/develop/how-to/find-and-immediate.html#find-modes
+os.environ['MIOPEN_FIND_MODE'] = 'FAST'
 
 from datasets import load_dataset, Audio
 import torch
@@ -52,28 +55,38 @@ def speech_recognition_firered_asr(dataset, beam_size = 1, batch_size = 16):
     predictions = []
     batch_uttid = []
     batch_wav_path = []
-
-    for i in tqdm(range(dataset.num_rows)):
-        batch_uttid.append(i)
-        batch_wav_path.append(dataset[i]["audio"]["path"])
-        if len(batch_uttid) >= batch_size or i == (dataset.num_rows - 1):
-            results = model.transcribe(
-                batch_uttid,
-                batch_wav_path,
-                {
-                    "use_gpu": 1,
-                    "beam_size": beam_size,
-                    "nbest": 1,
-                    "decode_max_len": 0,
-                    "softmax_smoothing": 1.0,
-                    "aed_length_penalty": 0.0,
-                    "eos_penalty": 1.0
-                }
-            )
-            for r in results:
-                predictions.append(r["text"])
-            batch_uttid = []
-            batch_wav_path = []
+    profiler = torch.profiler.profile(
+                    activities=[
+                        torch.profiler.ProfilerActivity.CPU,
+                        torch.profiler.ProfilerActivity.CUDA,
+                    ],
+                    with_stack=True,
+                    on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                    "profiler_trace_dir", use_gzip=True))
+    with torch.no_grad():
+        #profiler.start()
+        for i in tqdm(range(dataset.num_rows)):
+            batch_uttid.append(i)
+            batch_wav_path.append(dataset[i]["audio"]["path"])
+            if len(batch_uttid) >= batch_size or i == (dataset.num_rows - 1):
+                results = model.transcribe(
+                    batch_uttid,
+                    batch_wav_path,
+                    {
+                        "use_gpu": 1,
+                        "beam_size": beam_size,
+                        "nbest": 1,
+                        "decode_max_len": 0,
+                        "softmax_smoothing": 1.0,
+                        "aed_length_penalty": 0.0,
+                        "eos_penalty": 1.0
+                    }
+                )
+                for r in results:
+                    predictions.append(r["text"])
+                batch_uttid = []
+                batch_wav_path = []
+        #profiler.stop()
     return predictions
 
 
@@ -231,14 +244,14 @@ if __name__ == "__main__":
     # vLLM batch256,kv-cache-fp8 308 RPS: 31.67: wer_score: 97.61 %  cer_score: 20.52 %
     dataset = load_WenetSpeech_datasets()
     dataset = dataset.filter(lambda example: example["audio"]["array"].shape[0] < 30*16000)
-    dataset = dataset.select(range(0,20))
+    # dataset = dataset.select(range(0,1024))
 
     print(dataset)
 
     #results = speech_recognition_hf(dataset)
-    #results = speech_recognition_vllm(dataset, use_fp8_kv_cache=True, batch_size=256)
+    results = speech_recognition_vllm(dataset, use_fp8_kv_cache=True, batch_size=256)
     #results = speech_recognition_faster_whisper(dataset, beam_size=1)
-    results = speech_recognition_firered_asr(dataset, beam_size=1)
+    #results = speech_recognition_firered_asr(dataset, beam_size=1, batch_size=256)
 
     # https://pypi.org/project/whisper-normalizer/
     from whisper_normalizer.english import EnglishTextNormalizer
@@ -268,7 +281,7 @@ if __name__ == "__main__":
         predictions.append(pred)
         references.append(ref)
 
-        if 1:
+        if 0:
             print("========== ", row["audio"]["path"])
             print(ref)
             print(pred)
